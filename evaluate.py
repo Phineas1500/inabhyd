@@ -328,6 +328,27 @@ def parse_hypothesis_structure(hyp):
     return None
 
 
+def extract_after_thinking(response):
+    """
+    Extract content after thinking tags for Qwen3-style models.
+    Returns (content, had_thinking) tuple.
+    - If </think> exists, return content after it
+    - If <think> exists but no </think>, output was truncated - return None
+    - If no <think>, return original response
+    """
+    if '<think>' not in response:
+        return response, False
+
+    # Check if thinking is complete
+    if '</think>' in response:
+        # Extract content after </think>
+        idx = response.rfind('</think>')
+        return response[idx + 8:].strip(), True
+    else:
+        # Truncated output - thinking not complete
+        return None, True
+
+
 def parse_hypotheses_from_response(response):
     """Extract hypotheses from LLM response."""
     if not response:
@@ -335,7 +356,14 @@ def parse_hypotheses_from_response(response):
 
     hypotheses = []
 
-    # Remove thinking tags if present (for R1 model)
+    # Handle thinking tags (Qwen3, R1 models)
+    content, had_thinking = extract_after_thinking(response)
+    if content is None:
+        # Truncated thinking - no answer available
+        return []
+    response = content if content else response
+
+    # Also remove any remaining thinking tags (legacy behavior)
     response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
 
     # Split by newlines and filter
@@ -748,7 +776,14 @@ def parse_fol_hypotheses_from_response(response):
 
     hypotheses = []
 
-    # Remove thinking tags if present
+    # Handle thinking tags (Qwen3, R1 models)
+    content, had_thinking = extract_after_thinking(response)
+    if content is None:
+        # Truncated thinking - no answer available
+        return []
+    response = content if content else response
+
+    # Also remove any remaining thinking tags (legacy behavior)
     response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
 
     # Split by newlines, periods, semicolons
