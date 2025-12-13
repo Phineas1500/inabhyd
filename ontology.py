@@ -547,6 +547,65 @@ class Ontology(object):
     def prompt(self):
         return "prompt"
 
+    # FOL (First-Order Logic) versions of theories, observations, and hypotheses
+    # These skip the natural language translation step
+
+    @property
+    def fol_theories(self):
+        """Return world model axioms in FOL format."""
+        theories = []
+        for level_nodes in self.nodes:
+            for node in level_nodes:
+                for member in node.members():
+                    theories.append(
+                        FOL(FOL_Entity(member), FOL_Concept(node.name)))
+                for prop in node.properties():
+                    theories.append(
+                        FOL(FOL_Concept(node.name), FOL_Property(prop)))
+                for parent_node in node.parents():
+                    theories.append(FOL(FOL_Concept(node.name),
+                                    FOL_Concept(parent_node.name)))
+        shuffle(theories)
+        return '. '.join([theory.to_fol() for theory in theories]) + '.'
+
+    @property
+    def fol_observations(self):
+        """Return observations in FOL format."""
+        observations = []
+        for level_nodes in self.nodes:
+            for node in level_nodes:
+                if node.parents(False):
+                    for (choosen_node, member) in node.associated_members_for_recover_ontolog:
+                        observations.append(FOL(FOL_Entity(member), FOL_Concept(
+                            node.parents(False)[0].name)))
+                for prop in node.properties(False):
+                    for (choosen_node, member) in node.associated_members_for_recover_properties[prop]:
+                        observations.append(
+                            FOL(FOL_Entity(member), FOL_Property(prop)))
+                for member in node.members(False):
+                    for (choosen_node, prop) in node.associated_properties_for_recover_memberships:
+                        observations.append(
+                            FOL(FOL_Entity(member), FOL_Property(prop)))
+        shuffle(observations)
+        return ". ".join([obs.to_fol() for obs in observations]) + "."
+
+    @property
+    def fol_hypotheses(self):
+        """Return ground truth hypotheses in FOL format."""
+        hypotheses = []
+        for level_nodes in self.nodes:
+            for node in level_nodes:
+                if node.parents(False):
+                    hypotheses.append(
+                        FOL(FOL_Concept(node.name), FOL_Concept(node.parents(False)[0].name)))
+                for prop in node.properties(False):
+                    hypotheses.append(
+                        FOL(FOL_Concept(node.name), FOL_Property(prop)))
+                for member in node.members(False):
+                    hypotheses.append(
+                        FOL(FOL_Entity(member), FOL_Concept(node.name)))
+        return ". ".join([hyp.to_fol() for hyp in hypotheses])
+
 
 if __name__ == '__main__':
     pass

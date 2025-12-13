@@ -48,6 +48,24 @@ def make_user_prompt(ontology):
     return "Q: " + ontology.theories + " We observe that: " + ontology.observations + " Please come up with hypothesis to explain observations."
 
 
+def make_completion_prompt(system_prompt, user_prompt):
+    """Create a completion-style prompt for base models (no chat template)."""
+    return f"""{system_prompt}
+
+{user_prompt}
+
+A:"""
+
+
+# Base models that need completions API instead of chat
+BASE_MODELS = ['pythia-160m', 'pythia-410m', 'pythia-1b', 'pythia-1.4b', 'pythia-2.8b', 'pythia-6.9b', 'pythia-12b']
+
+
+def is_base_model(model_name):
+    """Check if model is a base model (needs completions API)."""
+    return any(base in model_name.lower() for base in BASE_MODELS)
+
+
 def sanitize_model_name(model_name):
     """Convert model name to safe filename string."""
     # e.g., "gpt-4o" -> "gpt4o", "gemma3-27b" -> "gemma3_27b"
@@ -115,15 +133,27 @@ def run_zero_shot_single_hypothesis(model_name, task_type, height, num_examples=
         user_prompt = make_user_prompt(ontology)
 
         try:
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0
-            )
-            reply = completion.choices[0].message.content
+            if is_base_model(model_name):
+                # Use completions API for base models
+                prompt = make_completion_prompt(SYSTEM_PROMPT, user_prompt)
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt,
+                    temperature=0,
+                    max_tokens=256
+                )
+                reply = completion.choices[0].text.strip()
+            else:
+                # Use chat completions API for instruction-tuned models
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0
+                )
+                reply = completion.choices[0].message.content
         except Exception as e:
             print(f"  Error on example {i+1}: {e}")
             reply = ""
@@ -224,15 +254,27 @@ def run_zero_shot_multiple_hypothesis(model_name, height, num_examples=NUM_EXAMP
         user_prompt = make_user_prompt(ontology)
 
         try:
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0
-            )
-            reply = completion.choices[0].message.content
+            if is_base_model(model_name):
+                # Use completions API for base models
+                prompt = make_completion_prompt(SYSTEM_PROMPT, user_prompt)
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt,
+                    temperature=0,
+                    max_tokens=256
+                )
+                reply = completion.choices[0].text.strip()
+            else:
+                # Use chat completions API for instruction-tuned models
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0
+                )
+                reply = completion.choices[0].message.content
         except Exception as e:
             print(f"  Error on example {i+1}: {e}")
             reply = ""
@@ -353,26 +395,47 @@ def run_icl_experiment(model_name, height, num_shots=8, ood=False, num_examples=
         examples.append({'demos': demos, 'test': test_ontology})
 
         # Build prompt with demonstrations
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-        for demo in demos:
-            demo_q = make_user_prompt(demo)
-            # Use CoT (Chain-of-Thought) as per paper Section 4.3:
-            # "demonstrations' ground truth hypotheses and CoTs"
-            demo_a = demo.CoT
-            messages.append({"role": "user", "content": demo_q})
-            messages.append({"role": "assistant", "content": demo_a})
-
         test_q = make_user_prompt(test_ontology)
-        messages.append({"role": "user", "content": test_q})
 
         try:
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0
-            )
-            reply = completion.choices[0].message.content
+            if is_base_model(model_name):
+                # Build few-shot completion prompt for base models
+                prompt_parts = [SYSTEM_PROMPT, ""]
+                for demo in demos:
+                    demo_q = make_user_prompt(demo)
+                    demo_a = demo.CoT
+                    prompt_parts.append(f"{demo_q}\n\nA: {demo_a}")
+                    prompt_parts.append("")
+                prompt_parts.append(f"{test_q}\n\nA:")
+                prompt = "\n".join(prompt_parts)
+
+                completion = client.completions.create(
+                    model=model_name,
+                    prompt=prompt,
+                    temperature=0,
+                    max_tokens=256
+                )
+                reply = completion.choices[0].text.strip()
+            else:
+                # Use chat completions API for instruction-tuned models
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+                for demo in demos:
+                    demo_q = make_user_prompt(demo)
+                    # Use CoT (Chain-of-Thought) as per paper Section 4.3:
+                    # "demonstrations' ground truth hypotheses and CoTs"
+                    demo_a = demo.CoT
+                    messages.append({"role": "user", "content": demo_q})
+                    messages.append({"role": "assistant", "content": demo_a})
+
+                messages.append({"role": "user", "content": test_q})
+
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0
+                )
+                reply = completion.choices[0].message.content
         except Exception as e:
             print(f"  Error on example {i+1}: {e}")
             reply = ""

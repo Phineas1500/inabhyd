@@ -3,28 +3,51 @@
 ## Project Overview
 Replicating experiments from the INABHYD paper (2509.03345v1.pdf) - Inductive and Abductive Reasoning with Ontology Trees.
 
-## Model Configuration
-- **Model**: Gemma 3 27B IT (`google/gemma-3-27b-it`)
-- **Deployment**: Modal with vLLM
+## Model Configurations
+
+### Gemma 3 27B IT (Instruction-tuned)
+- **Model**: `google/gemma-3-27b-it`
+- **Deployment**: Modal with vLLM (H100 GPU)
 - **Endpoint**: `https://phineas1500--gemma3-27b-inference-serve.modal.run/v1`
 - **Decoding**: Greedy (temperature=0) for deterministic results
 - **Model name for API**: `gemma3-27b`
+- **API**: Chat completions (instruction-tuned model)
+
+### Pythia 160M (Base model)
+- **Model**: `EleutherAI/pythia-160m-deduped`
+- **Deployment**: Modal with vLLM (T4 GPU - smaller model)
+- **Endpoint**: `https://phineas1500--pythia-160m-inference-serve.modal.run/v1`
+- **Decoding**: Greedy (temperature=0)
+- **Model name for API**: `pythia-160m`
+- **API**: Completions (base model, no chat template)
+- **Note**: Base model - will not follow instructions like instruction-tuned models
 
 ## Running Experiments
 
 ### Deploy Modal (keep server running):
 ```bash
+# For Gemma 3 27B
 modal deploy gemma_modal.py
+
+# For Pythia 160M
+modal deploy pythia_modal.py
 ```
 
 ### Run experiments:
 ```bash
-# Zero-shot single hypothesis (property task)
+# Gemma 3 27B - Zero-shot single hypothesis (property task)
 python run_experiments.py \
   --model gemma3-27b \
   --base-url "https://phineas1500--gemma3-27b-inference-serve.modal.run/v1" \
   --experiment zeroshot_single \
   --task property
+
+# Pythia 160M - Zero-shot single hypothesis (all tasks, all heights)
+python run_experiments.py \
+  --model pythia-160m \
+  --base-url "https://phineas1500--pythia-160m-inference-serve.modal.run/v1" \
+  --experiment zeroshot_single \
+  --task all
 
 # Can run all heights at once with --height 1 2 3 4
 ```
@@ -79,9 +102,10 @@ ontology.OntologyNode.__hash__ = safe_hash
 
 ## Important Files
 
-- `run_experiments.py` - Main experiment runner
+- `run_experiments.py` - Main experiment runner (supports both chat and completions API)
 - `evaluate.py` - Evaluation metrics (strong, weak accuracy, quality)
-- `gemma_modal.py` - Modal deployment for Gemma
+- `gemma_modal.py` - Modal deployment for Gemma 3 27B (instruction-tuned)
+- `pythia_modal.py` - Modal deployment for Pythia 160M (base model)
 - `reevaluate_results.py` - Re-evaluate saved results with corrected logic
 - `ontology.py` - Ontology tree generation (uses numpy.random.choice)
 - `morphology.py` - Generates concept/entity/property names
@@ -114,3 +138,42 @@ User: Q: {theories} We observe that: {observations} Please come up with hypothes
 
 ## SEED
 `SEED = 62471893` (same as paper)
+
+## FOL Dataset Implementation (COMPLETED)
+
+The First-Order Logic version of the dataset is now implemented. It skips the natural language translation step, outputting pure symbolic FOL.
+
+### Running FOL Experiments:
+```bash
+# Gemma 3 27B - FOL Zero-shot single hypothesis (property task)
+python run_fol_experiments.py \
+  --model gemma3-27b \
+  --base-url "https://phineas1500--gemma3-27b-inference-serve.modal.run/v1" \
+  --experiment zeroshot_single \
+  --task property
+
+# Run all heights
+python run_fol_experiments.py \
+  --model gemma3-27b \
+  --base-url "https://phineas1500--gemma3-27b-inference-serve.modal.run/v1" \
+  --experiment zeroshot_single \
+  --task property \
+  --height 0
+```
+
+### FOL Format Examples:
+| Type | NL | FOL |
+|------|-----|-----|
+| Entity + Property | "Amy is rainy" | `rainy(Amy)` |
+| Entity + Neg Property | "Amy is not slow" | `¬slow(Amy)` |
+| Entity + Concept | "Amy is a dalpist" | `dalpist(Amy)` |
+| Concept + Property | "All dalpists are rainy" | `∀x(dalpist(x) → rainy(x))` |
+| Concept + Concept | "All cats are mammals" | `∀x(cat(x) → mammal(x))` |
+
+### Key Files:
+- `run_fol_experiments.py` - FOL experiment runner
+- `fol.py:FOL.to_fol()` - FOL string generation method
+- `ontology.py:Ontology.fol_theories/fol_observations/fol_hypotheses` - FOL properties
+- `evaluate.py` - FOL parsing and evaluation functions (parse_fol_*, compute_fol_*)
+
+See `FOL_DATASET_PLAN.md` for the original implementation plan.

@@ -692,5 +692,306 @@ def main():
             print(f"Average hypotheses per response: {np.mean(results['pred_hypotheses_count']):.2f}")
 
 
+# =============================================================================
+# FOL (FIRST-ORDER LOGIC) PARSING AND EVALUATION
+# =============================================================================
+
+def parse_fol_hypothesis(text):
+    """
+    Parse a FOL hypothesis string.
+    Returns tuple: (type, subject, predicate, negated) or None
+
+    Examples:
+    - "rainy(Amy)" → ("ground", "Amy", "rainy", False)
+    - "¬slow(Amy)" → ("ground", "Amy", "slow", True)
+    - "dalpist(Amy)" → ("ground", "Amy", "dalpist", False)
+    - "∀x(dalpist(x) → rainy(x))" → ("universal", "dalpist", "rainy", False)
+    - "∀x(dalpist(x) → ¬slow(x))" → ("universal", "dalpist", "slow", True)
+    - "∀x(cat(x) → mammal(x))" → ("universal", "cat", "mammal", False)
+    """
+    text = text.strip()
+
+    # Handle alternative notations
+    text = text.replace('forall ', '∀')
+    text = text.replace('forall', '∀')
+    text = text.replace(' -> ', '→')
+    text = text.replace('->', '→')
+    text = text.replace('~', '¬')
+    text = text.replace('!', '¬')
+    # Normalize spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Universal quantifier: ∀x(P(x) → Q(x)) or ∀x(P(x) → ¬Q(x))
+    # Also handle ∀ x ( ... ) with spaces
+    universal_match = re.match(r'∀\s*x\s*\(\s*(\w+)\s*\(\s*x\s*\)\s*→\s*(¬?)\s*(\w+)\s*\(\s*x\s*\)\s*\)', text)
+    if universal_match:
+        subj = universal_match.group(1)
+        negated = universal_match.group(2) == '¬'
+        pred = universal_match.group(3)
+        return ("universal", subj, pred, negated)
+
+    # Ground atom: predicate(constant) or ¬predicate(constant)
+    ground_match = re.match(r'(¬?)\s*(\w+)\s*\(\s*(\w+)\s*\)', text)
+    if ground_match:
+        negated = ground_match.group(1) == '¬'
+        pred = ground_match.group(2)
+        const = ground_match.group(3)
+        return ("ground", const, pred, negated)
+
+    return None
+
+
+def parse_fol_hypotheses_from_response(response):
+    """Parse multiple FOL hypotheses from model response."""
+    if not response:
+        return []
+
+    hypotheses = []
+
+    # Remove thinking tags if present
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+
+    # Split by newlines, periods, semicolons
+    lines = re.split(r'[\n;]', response)
+
+    for line in lines:
+        # Also split by periods but be careful not to split within parentheses
+        parts = re.split(r'\.\s*(?![^(]*\))', line)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # Skip explanation lines
+            skip_patterns = [
+                r'^(based on|here are|the following|my hypothes|final hypothes|to explain)',
+                r'^(observation|therefore|thus|so|because|since|given)',
+                r'hypothes[ie]s?.*:',
+                r'^\*\*',
+                r'^theories?:',
+                r'^observations?:',
+            ]
+            should_skip = False
+            for pattern in skip_patterns:
+                if re.search(pattern, part.lower()):
+                    should_skip = True
+                    break
+            if should_skip:
+                continue
+
+            # Remove bullet points, numbers, etc.
+            part = re.sub(r'^[\d\.\-\*\•]+\s*', '', part)
+            part = re.sub(r'^hypothesis\s*\d*\s*:?\s*', '', part, flags=re.IGNORECASE)
+
+            # Try to parse as FOL
+            parsed = parse_fol_hypothesis(part)
+            if parsed:
+                hypotheses.append(part)
+
+    return hypotheses
+
+
+def parse_fol_ground_truth(gt_string):
+    """Parse FOL ground truth hypotheses from ontology.fol_hypotheses string."""
+    if not gt_string:
+        return []
+    hypotheses = []
+    # Split by period but be careful not to split within parentheses
+    parts = re.split(r'\.\s*(?![^(]*\))', gt_string)
+    for h in parts:
+        h = h.strip()
+        if h and parse_fol_hypothesis(h):
+            hypotheses.append(h)
+    return hypotheses
+
+
+def normalize_fol_hypothesis(hyp):
+    """Normalize a FOL hypothesis for comparison."""
+    parsed = parse_fol_hypothesis(hyp)
+    if parsed:
+        hyp_type, subj, pred, negated = parsed
+        # Normalize to lowercase
+        subj = subj.lower()
+        pred = pred.lower()
+        return (hyp_type, subj, pred, negated)
+    return None
+
+
+def compute_fol_strong_accuracy(pred_hypotheses, gt_hypotheses, first_only=True):
+    """
+    Strong accuracy for FOL: Predicted hypotheses match ground truth.
+
+    Args:
+        pred_hypotheses: List of predicted FOL hypothesis strings
+        gt_hypotheses: List of ground truth FOL hypothesis strings
+        first_only: If True (default), only compare first hypothesis from each list.
+
+    Returns 1 if match, 0 otherwise.
+    """
+    if not pred_hypotheses or not gt_hypotheses:
+        return 0
+
+    if first_only:
+        # Paper-compatible: only compare first hypothesis
+        pred_norm = normalize_fol_hypothesis(pred_hypotheses[0])
+        gt_norm = normalize_fol_hypothesis(gt_hypotheses[0])
+        return 1 if pred_norm and gt_norm and pred_norm == gt_norm else 0
+    else:
+        # Strict: require exact set match
+        if len(pred_hypotheses) != len(gt_hypotheses):
+            return 0
+
+        pred_set = set()
+        for p in pred_hypotheses:
+            norm = normalize_fol_hypothesis(p)
+            if norm:
+                pred_set.add(norm)
+
+        gt_set = set()
+        for g in gt_hypotheses:
+            norm = normalize_fol_hypothesis(g)
+            if norm:
+                gt_set.add(norm)
+
+        return 1 if pred_set == gt_set else 0
+
+
+class FOLKnowledgeBase:
+    """
+    A knowledge base for FOL inference using symbolic FOL format.
+
+    Supports:
+    - Ground atoms: predicate(constant), e.g., dalpist(Amy), rainy(Amy)
+    - Universal rules: ∀x(P(x) → Q(x)), e.g., ∀x(dalpist(x) → rainy(x))
+    - Negation: ¬predicate(constant), ∀x(P(x) → ¬Q(x))
+    """
+
+    def __init__(self):
+        # ground_atoms[(const, pred)] = True/False (True = positive, False = negated)
+        self.ground_atoms = {}
+        # universal_rules[(subj_pred, obj_pred)] = True/False
+        self.universal_rules = {}
+        # membership[const] = set of predicates the constant belongs to
+        self.membership = defaultdict(set)
+        # properties[pred] = set of properties/parent predicates
+        self.properties = defaultdict(set)
+        # negated_properties[pred] = set of negated properties
+        self.negated_properties = defaultdict(set)
+
+    def add_from_fol(self, fol_text):
+        """Parse and add facts from FOL text."""
+        # Split by period but be careful not to split within parentheses
+        parts = re.split(r'\.\s*(?![^(]*\))', fol_text)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            parsed = parse_fol_hypothesis(part)
+            if parsed:
+                hyp_type, subj, pred, negated = parsed
+                subj = subj.lower()
+                pred = pred.lower()
+
+                if hyp_type == "ground":
+                    # subj is constant, pred is predicate
+                    self.ground_atoms[(subj, pred)] = not negated
+                    if not negated:
+                        self.membership[subj].add(pred)
+                elif hyp_type == "universal":
+                    # subj is antecedent predicate, pred is consequent predicate
+                    self.universal_rules[(subj, pred)] = not negated
+                    if negated:
+                        self.negated_properties[subj].add(pred)
+                    else:
+                        self.properties[subj].add(pred)
+
+    def get_all_predicates_for_constant(self, const):
+        """Get all predicates a constant has, following inference chains."""
+        const = const.lower()
+        result = set()
+        visited = set()
+        queue = list(self.membership.get(const, set()))
+
+        while queue:
+            pred = queue.pop(0)
+            if pred in visited:
+                continue
+            visited.add(pred)
+            result.add((pred, False))  # (predicate, is_negated)
+
+            # Follow universal rules
+            for parent_pred in self.properties.get(pred, set()):
+                if parent_pred not in visited:
+                    queue.append(parent_pred)
+            for neg_pred in self.negated_properties.get(pred, set()):
+                result.add((neg_pred, True))
+
+        return result
+
+    def can_derive(self, const, pred, negated=False):
+        """Check if we can derive pred(const) or ¬pred(const)."""
+        const = const.lower()
+        pred = pred.lower()
+
+        # Check direct facts
+        if (const, pred) in self.ground_atoms:
+            is_positive = self.ground_atoms[(const, pred)]
+            if negated and not is_positive:
+                return True
+            if not negated and is_positive:
+                return True
+
+        # Check through inference
+        all_preds = self.get_all_predicates_for_constant(const)
+        for p, is_neg in all_preds:
+            if p == pred and is_neg == negated:
+                return True
+
+        return False
+
+
+def compute_fol_weak_accuracy(pred_hypotheses, gt_hypotheses, fol_observations, fol_theories):
+    """
+    Weak accuracy for FOL: Predicted hypotheses + theories can logically derive all observations.
+    """
+    if not pred_hypotheses:
+        return 0
+
+    # Parse observations
+    obs_list = parse_fol_ground_truth(fol_observations)
+    if not obs_list:
+        return 0
+
+    # Build knowledge base with theories and predicted hypotheses
+    kb = FOLKnowledgeBase()
+    kb.add_from_fol(fol_theories)
+
+    for hyp in pred_hypotheses:
+        parsed = parse_fol_hypothesis(hyp)
+        if parsed:
+            hyp_type, subj, pred, negated = parsed
+            if hyp_type == "ground":
+                kb.ground_atoms[(subj.lower(), pred.lower())] = not negated
+                if not negated:
+                    kb.membership[subj.lower()].add(pred.lower())
+            elif hyp_type == "universal":
+                kb.universal_rules[(subj.lower(), pred.lower())] = not negated
+                if negated:
+                    kb.negated_properties[subj.lower()].add(pred.lower())
+                else:
+                    kb.properties[subj.lower()].add(pred.lower())
+
+    # Check if each observation can be derived
+    for obs in obs_list:
+        parsed = parse_fol_hypothesis(obs)
+        if parsed:
+            hyp_type, const, pred, negated = parsed
+            if hyp_type == "ground":
+                if not kb.can_derive(const, pred, negated):
+                    return 0
+
+    return 1
+
+
 if __name__ == '__main__':
     main()

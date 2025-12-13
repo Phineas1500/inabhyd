@@ -59,3 +59,25 @@ class FOL:
                 return f"{self.S.plural_names} are {self.V.name}"
             if isinstance(self.V, FOL_Concept):
                 return f"{self.S.plural_names} are {self.V.plural_names}"
+
+    def to_fol(self):
+        """Return FOL string representation instead of natural language."""
+        if isinstance(self.S, FOL_Entity):
+            if isinstance(self.V, FOL_Property):
+                # Entity + Property: rainy(Amy) or ¬slow(Amy)
+                if self.V.prop.is_negated:
+                    return f"¬{self.V.prop.name}({self.S.name})"
+                return f"{self.V.prop.name}({self.S.name})"
+            if isinstance(self.V, FOL_Concept):
+                # Entity + Concept: dalpist(Amy)
+                return f"{self.V.name}({self.S.name})"
+        if isinstance(self.S, FOL_Concept):
+            if isinstance(self.V, FOL_Property):
+                # Concept + Property: ∀x(dalpist(x) → rainy(x)) or ∀x(dalpist(x) → ¬slow(x))
+                if self.V.prop.is_negated:
+                    return f"∀x({self.S.name}(x) → ¬{self.V.prop.name}(x))"
+                return f"∀x({self.S.name}(x) → {self.V.prop.name}(x))"
+            if isinstance(self.V, FOL_Concept):
+                # Concept + Concept: ∀x(cat(x) → mammal(x))
+                return f"∀x({self.S.name}(x) → {self.V.name}(x))"
+        return str(self)  # Fallback to NL
