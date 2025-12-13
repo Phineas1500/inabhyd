@@ -89,14 +89,19 @@ async def test(test_timeout=10 * MINUTES):
     print(f"Gemma 2 2B server URL: {url}")
 
     # Test with FOL-style prompt
-    system_prompt = """You are a logical reasoning system that performs abduction and induction in first-order logic.
+    # NOTE: Gemma 2's chat template does NOT support system messages
+    # We must include instructions in the user message
+    instructions = """You are a logical reasoning system that performs abduction and induction in first-order logic.
 Your job is to produce hypotheses in FOL format that explain observations given theories.
 Each hypothesis should take one of these forms:
 - predicate(constant) for ground atoms (e.g., dalpist(Amy), rainy(Amy))
 - ∀x(P(x) → Q(x)) for universal rules (e.g., ∀x(dalpist(x) → rainy(x)))
 Output only FOL hypotheses, one per line."""
 
-    user_prompt = "Theories: dalpist(Amy). dalpist(Jerry). dalpist(Pamela). Observations: rainy(Amy). rainy(Jerry). rainy(Pamela). Produce hypotheses to explain observations."
+    task = "Theories: dalpist(Amy). dalpist(Jerry). dalpist(Pamela). Observations: rainy(Amy). rainy(Jerry). rainy(Pamela). Produce hypotheses to explain observations."
+
+    # Combine instructions and task into single user message
+    user_prompt = f"{instructions}\n\n{task}"
 
     async with aiohttp.ClientSession(base_url=url) as session:
         print(f"Running health check for server at {url}")
@@ -106,13 +111,13 @@ Output only FOL hypotheses, one per line."""
         print(f"Successful health check for server at {url}")
 
         print(f"\nSending FOL test prompt...")
-        print(f"User: {user_prompt}\n")
+        print(f"Task: {task}\n")
 
         # Use chat completions API (instruction-tuned model)
+        # NOTE: No system message - Gemma 2 doesn't support it
         payload = {
             "model": "gemma2-2b",
             "messages": [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             "temperature": 0,

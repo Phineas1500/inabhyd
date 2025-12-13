@@ -31,6 +31,7 @@ from evaluate import (
 SEED = 62471893
 NUM_EXAMPLES = 100
 CONCURRENT_REQUESTS = 20  # Number of parallel requests
+NO_SYSTEM_PROMPT = False  # For models that don't support system role (e.g., Gemma 2)
 
 # System prompt with symbolic examples
 SYMBOLIC_FOL_SYSTEM_PROMPT = """You are a logical reasoning system that performs abduction and induction in first-order logic.
@@ -67,13 +68,21 @@ async def process_single_example(client, model_name, ontology, semaphore):
 
         user_prompt = make_symbolic_fol_user_prompt(sym_theories, sym_observations)
 
+        # Build messages based on whether model supports system role
+        if NO_SYSTEM_PROMPT:
+            # Merge system prompt into user message for models like Gemma 2
+            combined_prompt = f"{SYMBOLIC_FOL_SYSTEM_PROMPT}\n\n{user_prompt}"
+            messages = [{"role": "user", "content": combined_prompt}]
+        else:
+            messages = [
+                {"role": "system", "content": SYMBOLIC_FOL_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ]
+
         try:
             completion = await client.chat.completions.create(
                 model=model_name,
-                messages=[
-                    {"role": "system", "content": SYMBOLIC_FOL_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=messages,
                 temperature=0,
                 max_tokens=3800
             )
@@ -196,10 +205,13 @@ def main():
                         choices=[0, 1, 2, 3, 4])
     parser.add_argument('--concurrent', '-c', type=int, default=20,
                         help='Number of concurrent requests (default: 20)')
+    parser.add_argument('--no-system-prompt', action='store_true',
+                        help='Merge system prompt into user message (for models like Gemma 2 that do not support system role)')
     args = parser.parse_args()
 
-    global CONCURRENT_REQUESTS
+    global CONCURRENT_REQUESTS, NO_SYSTEM_PROMPT
     CONCURRENT_REQUESTS = args.concurrent
+    NO_SYSTEM_PROMPT = args.no_system_prompt
 
     heights = range(1, 5) if args.height == 0 else [args.height]
 
