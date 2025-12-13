@@ -23,6 +23,9 @@ MODEL_REVISION = "main"
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
+# HuggingFace secret for gated model access
+hf_secret = modal.Secret.from_name("huggingface-secret")
+
 # Fast boot for quicker cold starts
 FAST_BOOT = True
 
@@ -42,6 +45,7 @@ VLLM_PORT = 8000
         "/root/.cache/huggingface": hf_cache_vol,
         "/root/.cache/vllm": vllm_cache_vol,
     },
+    secrets=[hf_secret],  # Required for gated model access
 )
 @modal.concurrent(max_inputs=32)
 @modal.web_server(port=VLLM_PORT, startup_timeout=15 * MINUTES)
