@@ -1,4 +1,4 @@
-# Modal deployment for Gemma 2 2B IT with vLLM
+# Modal deployment for Llama 3.2 1B Instruct with vLLM
 # OpenAI-compatible API with greedy decoding
 # Small instruction-tuned model for MI research
 
@@ -15,21 +15,21 @@ vllm_image = (
     .env({"HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
-# Gemma 2 2B IT - instruction-tuned model
-MODEL_NAME = "google/gemma-2-2b-it"
+# Llama 3.2 1B Instruct - instruction-tuned model
+MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 MODEL_REVISION = "main"
 
 # Modal volumes for caching
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
-# HuggingFace secret for gated model access
+# HuggingFace secret for gated model access (Llama requires license acceptance)
 hf_secret = modal.Secret.from_name("huggingface-secret")
 
 # Fast boot for quicker cold starts
 FAST_BOOT = True
 
-app = modal.App("gemma2-2b-inference")
+app = modal.App("llama32-1b-inference")
 
 N_GPU = 1
 MINUTES = 60
@@ -38,7 +38,7 @@ VLLM_PORT = 8000
 
 @app.function(
     image=vllm_image,
-    gpu="A100",  # L4 is sufficient for 2B model, good balance of cost/performance
+    gpu="L4",  # L4 is sufficient for 1B model
     scaledown_window=15 * MINUTES,
     timeout=15 * MINUTES,
     volumes={
@@ -60,12 +60,12 @@ def serve():
         "--revision",
         MODEL_REVISION,
         "--served-model-name",
-        "gemma2-2b",
+        "llama32-1b",
         "--host",
         "0.0.0.0",
         "--port",
         str(VLLM_PORT),
-        # Gemma 2 2B settings
+        # Llama 3.2 1B settings
         "--max-model-len", "8192",
         "--dtype", "bfloat16",
     ]
@@ -82,26 +82,21 @@ def serve():
 
 @app.local_entrypoint()
 async def test(test_timeout=10 * MINUTES):
-    """Test the Gemma 2 2B endpoint."""
+    """Test the Llama 3.2 1B endpoint."""
     import aiohttp
 
     url = serve.get_web_url()
-    print(f"Gemma 2 2B server URL: {url}")
+    print(f"Llama 3.2 1B server URL: {url}")
 
     # Test with FOL-style prompt
-    # NOTE: Gemma 2's chat template does NOT support system messages
-    # We must include instructions in the user message
-    instructions = """You are a logical reasoning system that performs abduction and induction in first-order logic.
+    system_prompt = """You are a logical reasoning system that performs abduction and induction in first-order logic.
 Your job is to produce hypotheses in FOL format that explain observations given theories.
 Each hypothesis should take one of these forms:
 - predicate(constant) for ground atoms (e.g., dalpist(Amy), rainy(Amy))
-- ∀x(P(x) → Q(x)) for universal rules (e.g., ∀x(dalpist(x) → rainy(x)))
+- forall x(P(x) -> Q(x)) for universal rules (e.g., forall x(dalpist(x) -> rainy(x)))
 Output only FOL hypotheses, one per line."""
 
-    task = "Theories: dalpist(Amy). dalpist(Jerry). dalpist(Pamela). Observations: rainy(Amy). rainy(Jerry). rainy(Pamela). Produce hypotheses to explain observations."
-
-    # Combine instructions and task into single user message
-    user_prompt = f"{instructions}\n\n{task}"
+    user_prompt = "Theories: dalpist(Amy). dalpist(Jerry). dalpist(Pamela). Observations: rainy(Amy). rainy(Jerry). rainy(Pamela). Produce hypotheses to explain observations."
 
     async with aiohttp.ClientSession(base_url=url) as session:
         print(f"Running health check for server at {url}")
@@ -111,13 +106,14 @@ Output only FOL hypotheses, one per line."""
         print(f"Successful health check for server at {url}")
 
         print(f"\nSending FOL test prompt...")
-        print(f"Task: {task}\n")
+        print(f"User: {user_prompt}\n")
 
         # Use chat completions API (instruction-tuned model)
-        # NOTE: No system message - Gemma 2 doesn't support it
+        # Llama 3.2 supports system messages
         payload = {
-            "model": "gemma2-2b",
+            "model": "llama32-1b",
             "messages": [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             "temperature": 0,
@@ -130,9 +126,9 @@ Output only FOL hypotheses, one per line."""
             resp.raise_for_status()
             result = await resp.json()
             response = result["choices"][0]["message"]["content"]
-            print(f"Gemma 2 2B response:\n{response}")
+            print(f"Llama 3.2 1B response:\n{response}")
 
 
 if __name__ == "__main__":
-    print("Deploy with: modal deploy gemma2_2b_modal.py")
-    print("Test with: modal run gemma2_2b_modal.py")
+    print("Deploy with: modal deploy llama32_1b_modal.py")
+    print("Test with: modal run llama32_1b_modal.py")
