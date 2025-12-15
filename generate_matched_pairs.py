@@ -524,6 +524,166 @@ def generate_inabhyd_style_pair(seed: int, include_negated: bool = True):
     return example
 
 
+def generate_conflict_example(seed: int, correct_is_negated: bool = True):
+    """
+    Generate a Set 6 (Conflict Test) example.
+
+    Creates a conflict between 2-hop logical reasoning and 1-hop shortcut:
+    - Child entity → child concept → parent concept, child entity has property P
+      → Logically correct answer: parent concept has P
+    - Bridge entity is direct parent member, bridge entity has OPPOSITE of P
+      → Shortcut answer: parent concept has opposite of P
+
+    If model uses conjunction detection (shortcut), it will output the WRONG answer.
+    If model uses compositional reasoning, it will output the CORRECT answer.
+
+    Args:
+        seed: Random seed for reproducibility
+        correct_is_negated: If True, correct answer is negated property (e.g., "not salty")
+                           If False, correct answer is positive property (e.g., "salty")
+
+    Example (correct_is_negated=True):
+        Theories: "Barbara is a lerpant. Each lerpant is a timple. Dave is a timple."
+        Observations: "Barbara is not salty. Dave is salty."
+        Ground truth: "Timples are not salty" (via 2-hop: Barbara → lerpant → timple)
+        Shortcut answer: "Timples are salty" (via 1-hop: Dave is timple ∧ Dave is salty)
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    morph = Morphology()
+
+    # Get concepts
+    child_concept = morph.next_concept  # e.g., "lerpant"
+    parent_concept = morph.next_concept  # e.g., "timple"
+
+    # Get a base property from a family (we'll create both versions manually)
+    base_prop = morph.next_property([])
+
+    # Create the correct property (what 2-hop reasoning should derive)
+    correct_prop = Prop(base_prop.family, base_prop.name, negated=correct_is_negated)
+
+    # Create the shortcut property (opposite of correct - what conjunction detection gives)
+    shortcut_prop = Prop(base_prop.family, base_prop.name, negated=not correct_is_negated)
+
+    # Get entities
+    child_entity = morph.next_entity  # Goes through child concept (2-hop path)
+    bridge_entity = morph.next_entity  # Direct parent member (1-hop shortcut)
+
+    # Build FOL objects
+    fol_child_entity = FOL_Entity(child_entity)
+    fol_bridge_entity = FOL_Entity(bridge_entity)
+    fol_child_concept = FOL_Concept(child_concept)
+    fol_parent_concept = FOL_Concept(parent_concept)
+    fol_correct_prop = FOL_Property(correct_prop)
+    fol_shortcut_prop = FOL_Property(shortcut_prop)
+
+    # === THEORIES ===
+    # Child entity membership: "Barbara is a lerpant"
+    child_membership_fol = FOL(fol_child_entity, fol_child_concept)
+
+    # Ontology: "Each lerpant is a timple"
+    ontology_fol = FOL(fol_child_concept, fol_parent_concept)
+
+    # Bridge entity direct membership: "Dave is a timple"
+    bridge_membership_fol = FOL(fol_bridge_entity, fol_parent_concept)
+
+    theory_fols = [child_membership_fol, ontology_fol, bridge_membership_fol]
+
+    # === OBSERVATIONS ===
+    # Child entity has the CORRECT property: "Barbara is not salty"
+    child_observation_fol = FOL(fol_child_entity, fol_correct_prop)
+
+    # Bridge entity has the SHORTCUT (opposite) property: "Dave is salty"
+    bridge_observation_fol = FOL(fol_bridge_entity, fol_shortcut_prop)
+
+    observation_fols = [child_observation_fol, bridge_observation_fol]
+
+    # === ANSWERS ===
+    # Ground truth (via 2-hop reasoning): "Timples are not salty"
+    ground_truth_fol = FOL(fol_parent_concept, fol_correct_prop)
+
+    # Shortcut answer (via conjunction detection): "Timples are salty"
+    shortcut_answer_fol = FOL(fol_parent_concept, fol_shortcut_prop)
+
+    # Format outputs
+    def format_nl(fol_list):
+        return ". ".join([str(f).capitalize() for f in fol_list]) + "."
+
+    def format_fol(fol_list):
+        return ". ".join([f.to_fol() for f in fol_list]) + "."
+
+    # Shuffle for natural presentation
+    shuffle(theory_fols)
+    shuffle(observation_fols)
+
+    theories_nl = format_nl(theory_fols)
+    theories_fol = format_fol(theory_fols)
+    observations_nl = format_nl(observation_fols)
+    observations_fol = format_fol(observation_fols)
+
+    example = {
+        # Input
+        'theories_nl': theories_nl,
+        'observations_nl': observations_nl,
+        'theories_fol': theories_fol,
+        'observations_fol': observations_fol,
+
+        # Answers for evaluation
+        'ground_truth_nl': str(ground_truth_fol).capitalize(),
+        'ground_truth_fol': ground_truth_fol.to_fol(),
+        'shortcut_answer_nl': str(shortcut_answer_fol).capitalize(),
+        'shortcut_answer_fol': shortcut_answer_fol.to_fol(),
+
+        # For backwards compatibility with existing evaluation code
+        'gt_hypothesis_nl': str(ground_truth_fol).capitalize(),
+        'gt_hypothesis_fol': ground_truth_fol.to_fol(),
+
+        # Metadata for analysis
+        'seed': seed,
+        'child_entity': child_entity,
+        'bridge_entity': bridge_entity,
+        'child_concept': child_concept,
+        'parent_concept': parent_concept,
+        'correct_property': correct_prop,
+        'shortcut_property': shortcut_prop,
+        'correct_is_negated': correct_is_negated,
+        'set_type': 'conflict',
+
+        # Helper fields for three-way classification
+        'correct_property_name': correct_prop.name if not correct_prop.is_negated else f"not {correct_prop.name}",
+        'shortcut_property_name': shortcut_prop.name if not shortcut_prop.is_negated else f"not {shortcut_prop.name}",
+        'parent_concept_lower': parent_concept.lower(),
+    }
+
+    return example
+
+
+def generate_conflict_set(n_examples: int = 50, base_seed: int = 42):
+    """
+    Generate Set 6 (Conflict Test) examples.
+
+    Balances 50/50 between:
+    - Correct answer is negated property (correct_is_negated=True)
+    - Correct answer is positive property (correct_is_negated=False)
+
+    Args:
+        n_examples: Number of examples to generate
+        base_seed: Starting seed
+
+    Returns:
+        list: List of conflict test examples
+    """
+    examples = []
+    for i in range(n_examples):
+        seed = base_seed + i
+        # Alternate: even indices get negated correct, odd get positive correct
+        correct_is_negated = (i % 2 == 0)
+        example = generate_conflict_example(seed, correct_is_negated)
+        examples.append(example)
+    return examples
+
+
 def generate_salience_set(n_examples: int = 50, base_seed: int = 42, include_negated: bool = True):
     """Generate Set 2 (Salience Test) examples."""
     examples = []
@@ -584,13 +744,43 @@ def print_pair_example(h1, h2):
 def print_set_example(example, set_name):
     """Pretty print a single set example."""
     print("=" * 70)
-    print(f"{set_name} (seed={example['seed']}, negated={example['is_negated']})")
+    print(f"{set_name} (seed={example['seed']}, negated={example.get('is_negated', 'N/A')})")
     print("=" * 70)
 
     print(f"\nTheories (NL): {example['theories_nl']}")
     print(f"Observations (NL): {example['observations_nl']}")
     print(f"GT Hypothesis (NL): {example['gt_hypothesis_nl']}")
-    print(f"Parent mentions: {example['parent_mentions']}")
+    if 'parent_mentions' in example:
+        print(f"Parent mentions: {example['parent_mentions']}")
+    print()
+
+
+def print_conflict_example(example):
+    """Pretty print a Set 6 (Conflict Test) example."""
+    print("=" * 70)
+    print(f"Set 6 CONFLICT TEST (seed={example['seed']})")
+    print(f"  Correct answer uses: {'negated' if example['correct_is_negated'] else 'positive'} property")
+    print("=" * 70)
+
+    print(f"\nStructure:")
+    print(f"  Child entity: {example['child_entity']} → {example['child_concept']} → {example['parent_concept']}")
+    print(f"  Bridge entity: {example['bridge_entity']} → {example['parent_concept']} (direct)")
+
+    print(f"\nTheories (NL): {example['theories_nl']}")
+    print(f"Observations (NL): {example['observations_nl']}")
+
+    print(f"\n--- ANSWERS ---")
+    print(f"  CORRECT (2-hop logic): {example['ground_truth_nl']}")
+    print(f"  SHORTCUT (1-hop):      {example['shortcut_answer_nl']}")
+
+    print(f"\nReasoning paths:")
+    print(f"  2-hop: {example['child_entity']} is {example['child_concept']} → "
+          f"{example['child_concept']} is {example['parent_concept']} → "
+          f"{example['child_entity']} has {example['correct_property_name']} → "
+          f"{example['parent_concept']}s have {example['correct_property_name']}")
+    print(f"  1-hop: {example['bridge_entity']} is {example['parent_concept']} ∧ "
+          f"{example['bridge_entity']} has {example['shortcut_property_name']} → "
+          f"{example['parent_concept']}s have {example['shortcut_property_name']}")
     print()
 
 
@@ -602,8 +792,8 @@ def main():
     parser.add_argument('--output', '-o', type=str, default='matched_pairs.pkl', help='Output pickle file')
     parser.add_argument('--preview', '-p', type=int, default=3, help='Number of examples to preview (0 to skip)')
     parser.add_argument('--set', type=str, default='pure',
-                        choices=['pure', 'salience', 'inabhyd', 'evidential', 'all'],
-                        help='Which set to generate: pure (Set 1), salience (Set 2), inabhyd (Set 4), evidential (Set 5), or all')
+                        choices=['pure', 'salience', 'inabhyd', 'evidential', 'conflict', '6', 'all'],
+                        help='Which set to generate: pure (Set 1), salience (Set 2), inabhyd (Set 4), evidential (Set 5), conflict/6 (Set 6), or all')
     args = parser.parse_args()
 
     include_negated = not args.no_negated
@@ -648,6 +838,15 @@ def main():
             pickle.dump(evidential_examples, f)
         print(f"Saved {len(evidential_examples)} examples to matched_pairs_set5_evidential.pkl")
 
+        # Set 6: Conflict Test
+        print(f"\n--- Set 6 (Conflict Test) ---")
+        conflict_examples = generate_conflict_set(args.n_pairs, args.base_seed)
+        n_negated_correct = sum(1 for e in conflict_examples if e['correct_is_negated'])
+        print(f"Balance: {n_negated_correct} negated correct, {len(conflict_examples) - n_negated_correct} positive correct")
+        with open('matched_pairs_set6_conflict.pkl', 'wb') as f:
+            pickle.dump(conflict_examples, f)
+        print(f"Saved {len(conflict_examples)} examples to matched_pairs_set6_conflict.pkl")
+
         # Preview
         if args.preview > 0:
             print(f"\n{'='*70}")
@@ -665,6 +864,9 @@ def main():
 
             print("\n--- Set 5 (Evidential Path) Example ---")
             print_set_example(evidential_examples[0], "Set 5 (Evidential Path)")
+
+            print("\n--- Set 6 (Conflict Test) Example ---")
+            print_conflict_example(conflict_examples[0])
 
     elif args.set == 'pure':
         print(f"Generating {args.n_pairs} pure matched pairs (Set 1)...")
@@ -735,6 +937,23 @@ def main():
                 print_set_example(e, "Set 5 (Evidential Path)")
 
         output = args.output.replace('.pkl', '_evidential.pkl') if 'evidential' not in args.output else args.output
+        with open(output, 'wb') as f:
+            pickle.dump(examples, f)
+        print(f"\nSaved to {output}")
+
+    elif args.set in ['conflict', '6']:
+        print(f"Generating {args.n_pairs} conflict test examples (Set 6)...")
+        examples = generate_conflict_set(args.n_pairs, args.base_seed)
+
+        n_negated_correct = sum(1 for e in examples if e['correct_is_negated'])
+        print(f"\nGenerated {len(examples)} examples:")
+        print(f"  Negated correct: {n_negated_correct}, Positive correct: {len(examples) - n_negated_correct}")
+
+        if args.preview > 0:
+            for e in examples[:args.preview]:
+                print_conflict_example(e)
+
+        output = args.output.replace('.pkl', '_conflict.pkl') if 'conflict' not in args.output else args.output
         with open(output, 'wb') as f:
             pickle.dump(examples, f)
         print(f"\nSaved to {output}")
